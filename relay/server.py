@@ -12,6 +12,7 @@ import importlib.metadata
 import logging
 import os
 import signal
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -112,6 +113,8 @@ class RelayServer:
             self._relay_version = ""
         self._server: asyncio.Server | None = None
         self._running = False
+        self._stop_lock = asyncio.Lock()
+        self._stopped = False
         self._pending_commands: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._heartbeat_tasks: dict[str, asyncio.Task] = {}
         # Single Outstanding PING: track pending PONG per instance
@@ -135,33 +138,52 @@ class RelayServer:
             await self._server.serve_forever()
 
     async def stop(self) -> None:
-        """Stop the relay server"""
-        logger.info("Stopping Relay Server...")
-        self._running = False
+        """Stop the relay server (idempotent, concurrency-safe).
 
-        # Cancel all heartbeat tasks
-        for task in self._heartbeat_tasks.values():
-            task.cancel()
-        self._heartbeat_tasks.clear()
+        Uses ``_stop_lock`` to serialize concurrent calls (e.g. signal handler
+        and ``finally`` block). Each cleanup step is individually guarded so
+        that a partial failure does not prevent subsequent resources from being
+        released.
+        """
+        async with self._stop_lock:
+            if self._stopped:
+                return
+            logger.info("Stopping Relay Server...")
+            self._running = False
 
-        # Cancel pending commands
-        for future in self._pending_commands.values():
-            if not future.done():
-                future.cancel()
-        self._pending_commands.clear()
+            # Cancel all heartbeat tasks
+            for task in self._heartbeat_tasks.values():
+                task.cancel()
+            self._heartbeat_tasks.clear()
 
-        # Close all instances
-        await self.registry.close_all()
+            # Cancel pending commands
+            for future in self._pending_commands.values():
+                if not future.done():
+                    future.cancel()
+            self._pending_commands.clear()
 
-        # Stop cache cleanup
-        await self.request_cache.stop()
+            # Close all instances
+            try:
+                await self.registry.close_all()
+            except Exception:
+                logger.exception("Error closing instances")
 
-        # Close server
-        if self._server:
-            self._server.close()
-            await self._server.wait_closed()
+            # Stop cache cleanup
+            try:
+                await self.request_cache.stop()
+            except Exception:
+                logger.exception("Error stopping request cache")
 
-        logger.info("Relay Server stopped")
+            # Close server
+            if self._server:
+                try:
+                    self._server.close()
+                    await self._server.wait_closed()
+                except Exception:
+                    logger.exception("Error closing server")
+
+            self._stopped = True
+            logger.info("Relay Server stopped")
 
     async def _handle_connection(
         self,
@@ -723,22 +745,39 @@ async def run_server(
         reload_grace_period_ms=reload_grace_period_ms,
     )
 
-    loop = asyncio.get_event_loop()
-
-    # Setup signal handlers
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.create_task(server.stop()))
+    if sys.platform != "win32":
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(server.stop()))
 
     try:
         await server.start()
     except asyncio.CancelledError:
         pass
+    finally:
+        await server.stop()
 
 
 def _resolve_log_dir() -> Path:
-    """Resolve log directory from XDG_STATE_HOME (evaluated at call time)."""
-    state_home = os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local" / "state")
-    return Path(state_home) / "unity-cli" / "logs"
+    """Resolve log directory (evaluated at call time).
+
+    Priority:
+    1. XDG_STATE_HOME (explicit override, all platforms)
+    2. Windows: %LOCALAPPDATA%/unity-cli/logs
+    3. Unix: ~/.local/state/unity-cli/logs
+    """
+    env_override = os.environ.get("XDG_STATE_HOME")
+    if env_override:
+        return Path(env_override) / "unity-cli" / "logs"
+
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if not local_app_data:
+            local_app_data = str(Path.home() / "AppData" / "Local")
+        return Path(local_app_data) / "unity-cli" / "logs"
+
+    state_home = Path.home() / ".local" / "state"
+    return state_home / "unity-cli" / "logs"
 
 
 def get_log_path() -> Path:

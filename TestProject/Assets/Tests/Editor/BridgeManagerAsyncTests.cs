@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityBridge;
+using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace Game.Tests.Editor
 {
@@ -43,6 +46,8 @@ namespace Game.Tests.Editor
 
             // async Task なので await で例外ハンドリングを確認できる
             // 内部 catch で SendCommandErrorAsync が呼ばれるため、例外は伝播しない
+            BridgeLog.Enabled = true;
+            LogAssert.Expect(LogType.Error, new Regex("Command execution failed: InvalidOperationException - test error"));
             await manager.ExecuteCommandOnMainThreadAsync(args);
 
             Assert.That(sentErrors.Count, Is.EqualTo(1));
