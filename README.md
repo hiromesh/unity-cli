@@ -38,7 +38,9 @@ Key features:
 - Support for MenuItem / ContextMenu execution
 - Simultaneous control of multiple Unity instances
 - Domain reload resilience (auto-reconnection)
-- UI Toolkit VisualElement tree inspection (dump, query, inspect with ref IDs)
+- UI Toolkit VisualElement tree inspection (dump, query, inspect, click, scroll, text)
+- Dynamic API invocation (`u api call/schema` — 5,243+ Unity static methods)
+- Monkey testing (`u uitree monkey`) and structural snapshots (`u uitree snapshot`)
 - Open projects with appropriate version (Unity Hub integration)
 - Project information retrieval (no Relay Server required)
 
@@ -360,37 +362,48 @@ u asset info "Assets/Data/Config.asset"
 
 ### UI Toolkit Tree Inspection
 
-Inspect UI Toolkit VisualElement trees across Editor and Runtime panels. Uses a ref ID system (similar to Playwright MCP) for interactive debugging: dump the tree, then inspect individual elements by ref ID.
+Inspect and interact with UI Toolkit VisualElement trees. Uses ref IDs for element targeting.
 
 ```bash
-# List all panels (Editor + Runtime)
+# List panels / dump tree
 u uitree dump
+u uitree dump -p "PanelSettings" --json
 
-# Dump a panel's VisualElement tree
-u uitree dump -p "Toolbar"
+# Query elements (AND conditions)
+u uitree query -p "PanelSettings" -c "action-btn"
 
-# Limit depth
-u uitree dump -p "Toolbar" -d 3
+# Inspect
+u uitree inspect ref_3 --style --children
 
-# JSON output
-u uitree dump -p "Toolbar" --json
+# Interact
+u uitree click -p "PanelSettings" -n "BtnStart"
+u uitree text -p "PanelSettings" -n "ScoreLabel"
+u uitree scroll -p "PanelSettings" -n "ScrollView" --y 500
 
-# Query elements by type, name, or USS class (AND conditions)
-u uitree query -p "PanelSettings" -t Button
-u uitree query -p "PanelSettings" -n "StartBtn"
-u uitree query -p "PanelSettings" -c "primary-button"
+# Monkey test (random interactions + error monitoring)
+u uitree monkey -p "PanelSettings" -c "action-btn" --count 50 --seed 42
 
-# Inspect element by ref ID (assigned during dump/query)
-u uitree inspect ref_3
+# Structural snapshots (save/diff/list/delete)
+u uitree snapshot save -p "PanelSettings" --name baseline
+u uitree snapshot diff -p "PanelSettings" --name baseline
+```
 
-# Include resolvedStyle (layout, colors, font, margins, etc.)
-u uitree inspect ref_3 --style
+### Dynamic API Invocation
 
-# Include direct children info
-u uitree inspect ref_3 --children
+Call any Unity public static method via reflection. 5,243+ methods available.
 
-# Inspect by panel + name (without prior dump)
-u uitree inspect -p "Toolbar" -n "Play"
+```bash
+# Search methods
+u api schema --type AssetDatabase
+u api schema --namespace UnityEditor --limit 20
+
+# Call methods
+u api call UnityEngine.Application get_unityVersion
+u api call UnityEditor.AssetDatabase Refresh
+u api call UnityEditor.EditorApplication ExecuteMenuItem --params '["Window/General/Console"]'
+
+# Offline schema (cached per Unity version)
+u api schema --offline --type PlayerSettings
 ```
 
 ### Frame Recording
@@ -492,13 +505,14 @@ A Claude Code plugin that helps integrate unity-cli into your Unity development 
 
 | Skill | Description |
 |-------|-------------|
-| `/unity-preflight` | Compile & test validation |
+| `/unity-verify` | Compile & test validation (refresh → error check) |
 | `/unity-debug` | Error investigation |
 | `/unity-build` | Build pipeline |
 | `/unity-scene` | Scene construction |
 | `/unity-asset` | Asset & dependency management |
 | `/unity-perf` | Profiler analysis |
-| `/unity-ui` | UI Toolkit / uGUI inspection |
+| `/unity-ui` | UI testing (uitree + monkey + snapshot → PlayMode) |
+| `/unity-api` | Dynamic API invocation (5,243+ methods) |
 
 ## Recipes
 
