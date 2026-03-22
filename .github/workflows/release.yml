@@ -79,6 +79,10 @@ jobs:
           TAG: ${{ github.ref_name }}
           NOTES: ${{ steps.notes.outputs.NOTES }}
         run: |
+          if gh release view "$TAG" &>/dev/null; then
+            echo "Release $TAG already exists, skipping."
+            exit 0
+          fi
           echo "$NOTES" > /tmp/release-notes.md
           gh release create "$TAG" \
             --title "$TAG" \
