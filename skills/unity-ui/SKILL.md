@@ -1,384 +1,366 @@
 ---
 name: unity-ui
 description: |
-  UI 開発ドメインスキル。UI Toolkit と uGUI の両方に対応。ビジュアルツリー検査と開発イテレーション（作成→Play確認→修正ループ）を提供する。
-  Use for: "UI確認", "UIツリー", "UI Toolkit検査", "UI作って", "UI修正して", "UIレイアウト", "VisualElement調べて", "Canvas", "uGUI", "Image", "Text", "Button"
+  UI 開発・検査・自動テストワークフロー。uitree で構造把握→pytest E2E テスト生成→PlayMode テストに移植。
+  Use for: "UI確認", "UI Toolkit", "uGUI", "E2Eテスト", "UI操作", "uitree", "スクリーンショット"
 user-invocable: true
+metadata:
+  openclaw:
+    category: "game-development"
+    requires:
+      bins: ["u"]
 ---
 
-# Unity UI Development
+# unity-ui
 
-UI Toolkit および uGUI によるUI開発を支援する。ツリー検査と開発イテレーションの2つのフローを提供。
+> **PREREQUISITE:** `../unity-shared/SKILL.md`
+>
+> uitree コマンドは Play Mode 中のみ動作する。必ず `u play` してから実行すること。
+
+## UI テストの種別
+
+| 種別 | 検証内容 | 手法 | スクショ |
+|------|---------|------|---------|
+| Functional | 操作→状態が正しいか | click → text で値検証 | 不要 |
+| Visual Regression | 外観が変わっていないか | screenshot → 画像比較 | 必要 |
+| Structural Snapshot | ツリー構造が変わっていないか | dump --json → diff | 不要 |
+| Smoke | 最低限動くか | click → console にエラーなし | 任意 |
 
 ## UI システム判定
 
-| 特徴 | UI Toolkit | uGUI |
-|------|-----------|------|
-| ルート要素 | UIDocument | Canvas |
-| スタイル | USS | RectTransform + 各コンポーネント |
-| 要素 | VisualElement | Image, Text, Button 等 |
-| 検査コマンド | u uitree | u component inspect |
-| 推奨用途 | エディタ拡張、新規UI | 既存プロジェクト、レガシーUI |
+| 手がかり | UI Toolkit | uGUI |
+|---------|-----------|------|
+| ファイル | `.uxml`, `.uss` | `.prefab` に Canvas |
+| コンポーネント | UIDocument | Canvas, RectTransform |
 
-質問内容から UI システムを判定:
-- `VisualElement`, `UXML`, `USS`, `UIDocument` → UI Toolkit
-- `Canvas`, `Image`, `Text`, `Button`, `RectTransform` → uGUI
+## コマンドリファレンス
 
-## CLI Setup
+要素の指定方法は2通り: ref ID (`ref_3`) または `-p <panel> -n <name>`。
+
+### 構造把握
 
 ```bash
-# グローバルインストール済みの場合
-u <command>
-
-# uvx 経由（インストール不要）
-uvx --from git+https://github.com/bigdra50/unity-cli u <command>
+u uitree dump                           # 全パネル一覧 (contextType: Player がゲーム側)
+u uitree dump -p "PanelSettings"        # パネルのツリー (各要素の ref/name/type/classes が見える)
+u uitree dump -p "PanelSettings" --json # JSON 出力 (snapshot用)
+u uitree query -p "PanelSettings" -t Button              # type で検索 (VisualElement ベースのボタンはヒットしない → -c で検索)
+u uitree query -p "PanelSettings" -n "BtnStart"          # name で検索
+u uitree query -p "PanelSettings" -c "action-btn"        # USS class で検索
+u uitree query -p "PanelSettings" -t Button -c "primary" # AND 条件
+u uitree inspect -p "PanelSettings" -n "BtnStart"        # 要素詳細
+u uitree inspect ref_5_48                                # ref ID で指定
+u uitree inspect ref_5_48 --style                        # resolvedStyle 含む
+u uitree inspect ref_5_48 --children                     # 子要素情報含む
 ```
 
-以下のワークフロー内では `u` コマンドを使用する。
-
-## Decision Criteria
-
-| 状況 | 使うフロー |
-|------|-----------|
-| UIが表示されない/崩れている | Inspection Flow |
-| 新しいUIを作りたい | Development Iteration Flow |
-| 既存UIのスタイルを調整したい | Development Iteration Flow |
-| 特定要素のプロパティを確認したい | Inspection Flow → inspect |
-
-## Inspection Flow
-
-UI構造やスタイルの問題を調査する。
-
-```
-UI Issue / Layout Question
-  │
-  ▼
-┌─────────────────────────────┐
-│ Step 1: Panel Discovery     │
-│ u uitree dump               │
-└──────────┬──────────────────┘
-           ▼
-┌─────────────────────────────┐
-│ Step 2: Tree Overview       │
-│ u uitree dump -p <panel>    │
-└──────────┬──────────────────┘
-           ▼
-┌─────────────────────────────┐
-│ Step 3: Element Query       │
-│ u uitree query -p <panel>   │
-│   -t/-n/-c (絞り込み)       │
-└──────────┬──────────────────┘
-           ▼
-┌─────────────────────────────┐
-│ Step 4: Detail Inspection   │
-│ u uitree inspect <ref_id>   │
-│   --style --children        │
-└──────────┬──────────────────┘
-           ▼
-      Analyze & Report
-```
-
-### Panel Discovery
+### テキスト取得
 
 ```bash
-u uitree dump                 # パネル一覧
+u uitree text -p "PanelSettings" -n "ToastMessage"  # name で指定
+u uitree text ref_5_12                               # ref ID で指定
 ```
 
-ランタイム UI は通常 `GameView`。エディタ拡張は `InspectorWindow` 等。
-
-### Tree Overview
+### 操作
 
 ```bash
-u uitree dump -p "GameView"            # テキスト形式
-u uitree dump -p "GameView" --json     # JSON形式
-u uitree dump -p "GameView" -d 3       # 深さ3まで
+u uitree click -p "PanelSettings" -n "BtnContinue"  # name で指定
+u uitree click ref_5_48                              # ref ID で指定
+u uitree click ref_5_48 --count 2                    # ダブルクリック
+u uitree click ref_5_48 --button 1                   # 右クリック
+u uitree scroll -p "PanelSettings" -n "ScrollArea" --y 100
 ```
 
-各要素には `ref_N` の ID が付与される。
-
-### Element Query
-
-AND条件で組み合わせ可能:
+### スクリーンショット
 
 ```bash
-u uitree query -p "GameView" -t Button              # タイプ
-u uitree query -p "GameView" -n "StartBtn"           # 名前
-u uitree query -p "GameView" -c "primary-button"     # USSクラス
-u uitree query -p "GameView" -t Button -c "primary"  # 複合
+u screenshot                          # GameView (-s game がデフォルト)
+u screenshot -p "ui-check.png"        # 保存先指定
+u screenshot --burst -n 5             # 連続 (アニメーション確認)
 ```
 
-### Detail Inspection
+UI Toolkit / uGUI (Screen Space) は `-s game` でのみ映る。`-s camera` では映らない。
+
+GameView のキャプチャにはエディタのフォーカスが必要。タイムアウトする場合は再試行で解決することが多い。
+
+### uGUI の場合
+
+uitree は UI Toolkit 専用。uGUI は scene/component コマンドで操作する。
 
 ```bash
-u uitree inspect ref_3                     # 基本情報
-u uitree inspect ref_3 --style             # resolvedStyle 込み
-u uitree inspect ref_3 --children          # 子要素込み
-u uitree inspect ref_3 --style --children  # 両方
+u scene hierarchy --depth 3
+u component list -t "Canvas"
+u component inspect -t "MyButton" -T "UnityEngine.UI.Button"
 ```
 
-| フィールド | 内容 |
-|-----------|------|
-| type, name, classes | 要素の識別情報 |
-| visible, enabledSelf | 表示/有効状態 |
-| layout | ローカル座標 (x, y, width, height) |
-| worldBound | グローバル座標 |
-| resolvedStyle | 計算済みスタイル (--style 時) |
-| children | 子要素リスト (--children 時) |
+## 開発→テストフロー
 
-## Development Iteration Flow
+```text
+Phase 1: 作成 & 手動確認
+  コード変更 → /unity-verify → play → dump → 操作 → screenshot → stop
 
-UI の作成→Play 確認→修正を繰り返す開発サイクル。
+Phase 2: pytest E2E テスト生成
+  dump で構造把握 → pytest テストファイルを生成 → 実行して確認
 
-```
-Edit UI (UXML/USS/C#)
-  │
-  ▼
-┌─────────────────────────────┐
-│ Step 1: Compile & Play      │
-│ u refresh                   │
-│ u state (poll isCompiling)  │
-│ u console get -l E          │
-│ u play                      │
-│ u state (poll isPlaying)    │
-└──────────┬──────────────────┘
-           ▼
-      compile error? ──yes──► Fix & restart
-           │
-           no
-           ▼
-┌─────────────────────────────┐
-│ Step 2: Visual Check        │
-│ u uitree dump -p "GameView" │
-│ u uitree query / inspect    │
-│ u screenshot -s game        │
-└──────────┬──────────────────┘
-           ▼
-┌─────────────────────────────┐
-│ Step 3: User Feedback       │
-│ スクリーンショットとツリー   │
-│ 情報を提示しフィードバック待ち│
-└──────────┬──────────────────┘
-           ▼
-      OK? ──yes──► u stop → Done
-           │
-           no
-           ▼
-      u stop → Edit → Step 1
+Phase 3: PlayMode テスト移植
+  安定したシナリオを C# に書き直す → CI で回帰テスト
 ```
 
-### Step 1: Compile & Play
-
-```bash
-u refresh
-u state          # isCompiling == false まで 2秒間隔ポーリング（最大30秒）
-u console get -l E
-```
-
-コンパイルエラーがなければ:
+### Phase 1: 作成 & 手動確認
 
 ```bash
 u play
-u state          # isPlaying == true まで（最大10秒）
+u uitree dump -p "PanelSettings"                 # 構造把握
+u uitree click -p "PanelSettings" -n "BtnStart"  # 操作
+u uitree text -p "PanelSettings" -n "StatusLabel" # 状態確認
+u screenshot                                      # 結果キャプチャ
+u stop
 ```
 
-### Step 2: Visual Check
+### Phase 2: pytest E2E テスト生成
 
-Play Mode 中にUIの状態を確認:
+Phase 1 で確認した操作シナリオを、pytest テストとして永続化する。
+unity-cli の Python API (`UITreeAPI`, `ConsoleAPI`, `EditorAPI`) を直接使う。
 
-```bash
-u uitree dump -p "GameView" -d 3              # ツリー構造
-u uitree query -p "GameView" -t Label         # 特定要素を検索
-u uitree inspect ref_N --style                # スタイル詳細
-u screenshot -s game -p ./ui_check.png        # スクリーンショット
+手順:
+1. `u play` + `u uitree dump` で構造を把握する
+2. 操作可能な要素（ボタン名、ラベル名）を特定する
+3. 以下のテンプレートに従い、`tests/integration/` にテストファイルを生成する
+4. `uv run python -m pytest tests/integration/<file> -v` で実行して確認する
+
+テンプレート:
+
+```python
+"""E2E tests for <UI名> — pytest + unity-cli API."""
+import time
+import pytest
+from unity_cli.api import ConsoleAPI, EditorAPI, UITreeAPI
+from unity_cli.client import RelayConnection
+
+PANEL = "<パネル名>"  # u uitree dump で確認したパネル名
+
+
+@pytest.fixture(scope="module")
+def conn() -> RelayConnection:
+    conn = RelayConnection(instance="<プロジェクト名>", timeout=5.0)
+    try:
+        EditorAPI(conn).get_state()
+    except Exception:
+        pytest.skip("Relay not available")
+    return conn
+
+
+@pytest.fixture(scope="module")
+def uitree(conn: RelayConnection) -> UITreeAPI:
+    return UITreeAPI(conn)
+
+
+@pytest.fixture(scope="module")
+def console(conn: RelayConnection) -> ConsoleAPI:
+    return ConsoleAPI(conn)
+
+
+@pytest.fixture(scope="module")
+def editor(conn: RelayConnection) -> EditorAPI:
+    return EditorAPI(conn)
+
+
+@pytest.fixture(autouse=True)
+def _play_mode(editor: EditorAPI):
+    """Play Mode に入る。"""
+    state = editor.get_state()
+    if not state.get("isPlaying"):
+        editor.play()
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if editor.get_state().get("isPlaying"):
+                break
+            time.sleep(0.5)
+    yield
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _stop_after_all(editor: EditorAPI):
+    """全テスト後に Play Mode 終了。"""
+    yield
+    try:
+        editor.stop()
+    except Exception:
+        pass
+
+
+# --- Functional テスト ---
+
+class TestMenuButtons:
+    def test_continue_shows_toast(self, uitree: UITreeAPI) -> None:
+        uitree.click(panel=PANEL, name="<ボタン名>")
+        time.sleep(0.3)
+        result = uitree.text(panel=PANEL, name="<ラベル名>")
+        assert result["text"] == "<期待値>"
+
+
+# --- Smoke テスト ---
+
+class TestSmoke:
+    BUTTONS = ["<ボタン1>", "<ボタン2>", ...]
+
+    def test_all_clickable_without_errors(self, uitree: UITreeAPI, console: ConsoleAPI) -> None:
+        console.clear()
+        for btn in self.BUTTONS:
+            uitree.click(panel=PANEL, name=btn)
+            time.sleep(0.2)
+        errors = console.get(types=["error"])
+        assert errors.get("entries", []) == []
+
+
+# --- Structural Snapshot ---
+
+class TestStructure:
+    def test_tab_switch_changes_tree(self, uitree: UITreeAPI) -> None:
+        before = uitree.dump(panel=PANEL)
+        uitree.click(panel=PANEL, name="<タブ名>")
+        time.sleep(0.3)
+        after = uitree.dump(panel=PANEL)
+        assert before != after
 ```
 
-### Step 3: User Feedback
+既存の `conftest.py` に `conn`, `uitree`, `editor`, `console` fixture がある場合はテンプレートの fixture 定義を省略し、conftest に委譲する。fixture の scope は conftest に合わせる（conftest が `session` なら `_play_mode` 等も同じ scope か互換性のある scope にする）。
 
-スクリーンショットとツリー情報をユーザーに提示し、修正指示を待つ。自動修正は行わない。
-
-修正が必要なら `u stop` で Play Mode を終了し、コードを修正して Step 1 に戻る。
-
-## Investigation Patterns
-
-### レイアウト問題
-
-```bash
-u uitree dump -p "GameView" -d 2
-u uitree query -p "GameView" -c "broken-layout"
-u uitree inspect ref_N --style
+動的な値（タイムスタンプ、プログレス%等）を持つラベルは等値比較ではなくフォーマット検証を使う:
+```python
+assert result["text"].endswith("%")  # "65%" 等
 ```
 
-確認ポイント: width/height が 0、display: none、visibility: hidden。
+テストの種別に応じてクラスを追加する:
+- `TestMenuButtons` — Functional (click → text 検証)
+- `TestSmoke` — 全ボタンクリック + エラーなし
+- `TestStructure` — ツリー構造の変化検出
+- `TestVisual` — screenshot 撮影（画像比較は手動 or 別ツール）
 
-### 要素が見つからない
+### Phase 3: PlayMode テスト移植
 
-```bash
-u uitree query -p "GameView" -n "Button"     # 名前で広く
-u uitree query -p "GameView" -t Button       # タイプで
-u uitree dump -p "GameView" --json           # 全ツリー
+Phase 2 の pytest で安定したシナリオを C# PlayMode テストに書き直す。
+
+PlayMode に移植する基準:
+- CI で毎回回す回帰テスト
+- フレーム精度が必要 (アニメーション完了待ち等)
+- Assert で厳密に状態検証
+- InputSystem / EventSystem 経由の操作
+
+pytest E2E のまま残す基準:
+- 探索的テスト (シナリオが毎回変わる)
+- AI エージェントの自律テスト
+- Unity 外からの結合テスト
+
+手順:
+1. Phase 2 の pytest テストから安定したシナリオを選ぶ
+2. 以下のテンプレートに従い、`Assets/Tests/PlayMode/` に C# テストを生成する
+3. asmdef に UI コントローラの参照を追加する（必要に応じて）
+4. `u tests run play` で実行して確認する
+
+テンプレート:
+
+```csharp
+using System.Collections;
+using NUnit.Framework;
+using UnityEngine;
+using UnityEngine.TestTools;
+using UnityEngine.UIElements;
+
+namespace Game.Tests.PlayMode
+{
+    [TestFixture]
+    public class <UI名>Tests
+    {
+        private GameObject _hudObject;
+        private UIDocument _uiDocument;
+        private VisualElement _root;
+
+        [UnitySetUp]
+        public IEnumerator SetUp()
+        {
+            // UIDocument を持つ GameObject を生成
+            // コントローラが Awake/OnEnable で初期化するのを待つ
+            _hudObject = new GameObject("TestHUD");
+            _hudObject.AddComponent<<コントローラ名>>();
+            _uiDocument = _hudObject.GetComponent<UIDocument>();
+
+            // コルーチン初期化 (StartCoroutine in OnEnable 等) は1フレームでは完了しない
+            // 2フレーム以上待つ
+            yield return null;
+            yield return null;
+
+            _root = _uiDocument.rootVisualElement;
+            Assert.IsNotNull(_root, "Root visual element should be initialized");
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            Object.Destroy(_hudObject);
+        }
+
+        // --- Functional テスト ---
+
+        [UnityTest]
+        public IEnumerator <ボタン名>_Shows<期待される動作>()
+        {
+            var btn = _root.Q("<ボタン名>");
+            Assert.IsNotNull(btn);
+
+            Click(btn);
+            yield return null;
+
+            var label = _root.Q<Label>("<ラベル名>");
+            Assert.AreEqual("<期待値>", label.text);
+        }
+
+        // --- Smoke テスト ---
+
+        [UnityTest]
+        public IEnumerator AllButtons_ClickableWithoutErrors()
+        {
+            var buttons = new[] { "<ボタン1>", "<ボタン2>", ... };
+
+            foreach (var name in buttons)
+            {
+                var element = _root.Q(name);
+                Assert.IsNotNull(element, $"{name} should exist");
+                Click(element);
+                yield return null;
+            }
+
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        // --- ヘルパー ---
+
+        private static void Click(VisualElement element)
+        {
+            using var evt = ClickEvent.GetPooled();
+            evt.target = element;
+            element.panel.visualTree.SendEvent(evt);
+        }
+    }
+}
 ```
 
-### スタイル競合
+Click ヘルパーの注意:
+- `ClickEvent.GetPooled()` で座標計算不要のイベントを生成し、`panel.visualTree.SendEvent` で発火する
+- `NavigationSubmitEvent` では `RegisterCallback<ClickEvent>` が反応しないため使わない
+- ホバーやプレスエフェクトも再現したい場合は `PointerDownEvent` + `PointerUpEvent` を `worldBound.center` 座標付きで送る
 
-```bash
-u uitree inspect ref_N --style               # 対象
-u uitree inspect ref_parent --style          # 親
-u uitree inspect ref_sibling --style         # 兄弟
-```
+asmdef の注意:
+- テスト対象クラスが `Assembly-CSharp`（asmdef なし）にある場合、テスト asmdef からは直接参照できない
+- 対象クラスに専用 asmdef を作成し、テスト asmdef の `references` に追加する
+- 例: `Assets/UI/Game.UI.asmdef` を作成 → `Game.Tests.PlayMode.asmdef` の references に `"Game.UI"` を追加
 
-親の flex-direction, align-items, justify-content が子のレイアウトに影響していないか確認。
+Phase 2 の pytest テストの各テストメソッドを1対1で C# に移植する。
 
-## Anti-Patterns
+移植後は `u tests run play` で実行。
 
-| パターン | 問題 | 対策 |
-|---------|------|------|
-| Play 中にコード修正 | 変更が反映されない | stop → 修正 → play |
-| 毎回フルツリーダンプ | トークン浪費 | `-d 2` + query で絞り込む |
-| --style を常時付与 | 出力が巨大 | 必要な時だけ |
-| ref ID の再利用 | Play 再開で ID が変わる | Play ごとに再取得 |
+## CLI 非対応操作
 
-## Token-Saving Strategies
-
-| 状況 | 対応 |
-|------|------|
-| ツリーが巨大 | `-d 2` で浅く取得、必要部分だけ深掘り |
-| JSON出力が冗長 | テキスト形式 (デフォルト) を使う |
-| resolvedStyle が長い | 必要な時だけ `--style` を付ける |
-| query結果が多い | 複合条件 (-t + -c) で絞り込む |
-| イテレーション中 | 前回と差分がある部分だけ再検査 |
-
----
-
-# uGUI (Canvas-based UI)
-
-uGUI は Canvas をルートとするレガシーUI システム。unity-cli の component コマンドで検査・操作する。
-
-## uGUI Inspection Flow
-
-```
-UI Issue / Layout Question (uGUI)
-  │
-  ▼
-┌─────────────────────────────┐
-│ Step 1: Find Canvas         │
-│ u gameobject find           │
-│   --name "Canvas"           │
-│ u scene hierarchy -d 3      │
-└──────────┬──────────────────┘
-           ▼
-┌─────────────────────────────┐
-│ Step 2: List Components     │
-│ u component list -t <obj>   │
-└──────────┬──────────────────┘
-           ▼
-┌─────────────────────────────┐
-│ Step 3: Inspect Properties  │
-│ u component inspect -t <obj>│
-│   -T Image / Text / Button  │
-└──────────┬──────────────────┘
-           ▼
-      Analyze & Report
-```
-
-### Step 1: Canvas の発見
-
-```bash
-u gameobject find --name "Canvas"    # Canvas を検索
-u scene hierarchy -d 3               # 上位3階層で UI 構造を把握
-```
-
-### Step 2: コンポーネント一覧
-
-```bash
-u component list -t "StartButton"    # オブジェクトのコンポーネント一覧
-```
-
-典型的な uGUI コンポーネント:
-- `RectTransform`: 位置・サイズ
-- `CanvasRenderer`: 描画
-- `Image`: 画像表示
-- `Text` / `TextMeshProUGUI`: テキスト表示
-- `Button`: ボタン
-- `Toggle`, `Slider`, `Dropdown`, `InputField`: 入力系
-
-### Step 3: プロパティ検査
-
-```bash
-u component inspect -t "StartButton" -T Button
-u component inspect -t "Title" -T Text
-u component inspect -t "Background" -T Image
-```
-
-### uGUI プロパティ変更
-
-```bash
-# Image の色変更
-u component modify -t "Background" -T Image --prop m_Color --value '{"r":1,"g":0,"b":0,"a":1}'
-
-# Text の内容変更
-u component modify -t "Title" -T Text --prop m_Text --value "New Title"
-
-# RectTransform の位置変更
-u component modify -t "Panel" -T RectTransform --prop m_AnchoredPosition --value '{"x":100,"y":50}'
-```
-
-### uGUI レイアウト問題の調査
-
-```bash
-# RectTransform を確認
-u component inspect -t "Panel" -T RectTransform
-
-# 確認ポイント
-# - sizeDelta: サイズ
-# - anchoredPosition: アンカー基準の位置
-# - anchorMin / anchorMax: アンカー設定
-# - pivot: ピボット
-```
-
-## uGUI Development Iteration Flow
-
-```
-Edit UI (Script / Inspector)
-  │
-  ▼
-┌─────────────────────────────┐
-│ Step 1: Compile & Play      │
-│ u refresh                   │
-│ u play                      │
-└──────────┬──────────────────┘
-           ▼
-┌─────────────────────────────┐
-│ Step 2: Visual Check        │
-│ u scene hierarchy           │
-│ u component inspect ...     │
-│ u screenshot -s game        │
-└──────────┬──────────────────┘
-           ▼
-┌─────────────────────────────┐
-│ Step 3: User Feedback       │
-│ スクリーンショット提示       │
-└──────────┬──────────────────┘
-           ▼
-      OK? → u stop → Done
-           ↓ no
-      u stop → Edit → Step 1
-```
-
-## UI Toolkit vs uGUI 選択ガイド
-
-| 条件 | 推奨 |
-|------|------|
-| 新規プロジェクト | UI Toolkit |
-| エディタ拡張 | UI Toolkit |
-| 既存 uGUI プロジェクト | uGUI 継続 |
-| TextMeshPro 使用中 | uGUI |
-| 複雑なレイアウト | UI Toolkit (Flexbox) |
-| ランタイム性能重視 | uGUI (成熟度) |
-
-## Related Skills
-
-| スキル | 使い分け |
-|--------|---------|
-| /unity-preflight | UIコード修正後のコンパイルエラーが解決しない場合 |
-| /unity-debug | UI操作時のランタイムエラー（NullRef等）を調査する場合 |
-| /unity-scene | UI オブジェクトの配置・Transform 調整 |
+unity-shared のフォールバック順に従う:
+1. `u api schema --type <Type>` で対応メソッドを検索
+2. `u api call` で実行
+3. 該当なしの場合のみ YAML 直接編集
