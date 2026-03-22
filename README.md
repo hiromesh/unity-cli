@@ -491,28 +491,32 @@ u play --quiet 2>/dev/null; echo $?  # Suppress output, check exit code only
 | `UNITY_CLI_NO_PRETTY` | Set to `1` to disable Rich formatting |
 | `NO_COLOR` | Set to disable colors (standard) |
 
-## Claude Code Plugin (Experimental)
+## AI Agent Skills
 
-A Claude Code plugin that helps integrate unity-cli into your Unity development workflow with Claude Code. Provides routing, validation, debugging, and other skills to assist CLI-based Unity operations.
+Workflow skills for AI coding agents (Claude Code, Codex, Gemini CLI, Cursor, GitHub Copilot, Windsurf, etc.). Installed via [Skills CLI](https://skills.sh/).
 
 ```bash
-# Add from marketplace
-/plugin marketplace add bigdra50/unity-cli
+# Install all skills (project-local)
+npx skills add github:bigdra50/unity-cli
 
-# Install
-/plugin install unity-cli@unity-tools
+# Install globally (user-level)
+npx skills add github:bigdra50/unity-cli -g
+
+# Install specific skills only
+npx skills add github:bigdra50/unity-cli -s unity-ui unity-api
 ```
 
 | Skill | Description |
 |-------|-------------|
-| `/unity-verify` | Compile & test validation (refresh → error check) |
-| `/unity-debug` | Error investigation |
-| `/unity-build` | Build pipeline |
-| `/unity-scene` | Scene construction |
-| `/unity-asset` | Asset & dependency management |
-| `/unity-perf` | Profiler analysis |
-| `/unity-ui` | UI testing (uitree + monkey + snapshot → PlayMode) |
-| `/unity-api` | Dynamic API invocation (5,243+ methods) |
+| `unity-verify` | Compile & test validation (refresh → error check) |
+| `unity-debug` | Error investigation |
+| `unity-build` | Build pipeline |
+| `unity-scene` | Scene construction |
+| `unity-asset` | Asset & dependency management |
+| `unity-perf` | Profiler analysis |
+| `unity-ui` | UI testing (uitree + monkey + snapshot → PlayMode) |
+| `unity-api` | Dynamic API invocation (5,243+ methods) |
+| `unity-shared` | Common rules (loaded automatically by other skills) |
 
 ## Recipes
 
