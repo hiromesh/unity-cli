@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Reflection;
 using System.Threading;
 using UnityBridge.Helpers;
@@ -21,6 +22,13 @@ namespace UnityBridge
         private static bool _compilationEventActive;
         private static double _lastUpdateTime;
         private const double MinUpdateIntervalSeconds = 1.0;
+
+        // Watchdog: detect main thread stall (modal dialogs, etc.)
+        private static long _lastUpdateTick;
+        private static int _blockedSent; // 0 = not blocked, 1 = blocked (int for Interlocked)
+        private static Timer _watchdogTimer;
+        private const int WatchdogIntervalMs = 5000;
+        private static readonly long BlockedThresholdTicks = Stopwatch.Frequency * 5; // 5 seconds
 
         private static readonly Func<bool> s_isCompiling;
 
@@ -47,6 +55,11 @@ namespace UnityBridge
             EditorApplication.playModeStateChanged += _ => EvaluatePhase();
             EditorApplication.update += OnUpdate;
 
+            // Watchdog timer: runs on background thread to detect main thread stalls
+            _lastUpdateTick = Stopwatch.GetTimestamp();
+            _watchdogTimer = new Timer(OnWatchdogTick, null, WatchdogIntervalMs, WatchdogIntervalMs);
+            AssemblyReloadEvents.beforeAssemblyReload += () => _watchdogTimer?.Dispose();
+
             BridgeLog.Verbose("[EditorStateCache] Initialized");
         }
 
@@ -55,7 +68,7 @@ namespace UnityBridge
         /// </summary>
         public static void SetDomainReloading(bool value)
         {
-            _domainReloadPending = value;
+            Volatile.Write(ref _domainReloadPending, value);
         }
 
         /// <summary>
@@ -91,13 +104,24 @@ namespace UnityBridge
             var manager = BridgeManager.Instance;
             if (manager?.Client is not { IsConnected: true }) return;
 
-            _domainReloadPending = false;
+            Volatile.Write(ref _domainReloadPending, false);
             _lastSentPhase = null; // force re-send
             EvaluatePhase();
         }
 
         private static void OnUpdate()
         {
+            // Update tick for watchdog — must run every frame regardless of connection state
+            Volatile.Write(ref _lastUpdateTick, Stopwatch.GetTimestamp());
+
+            // If watchdog sent editor_blocked, force re-evaluation on recovery
+            if (Volatile.Read(ref _blockedSent) != 0)
+            {
+                Volatile.Write(ref _blockedSent, 0);
+                _lastSentPhase = null;
+                BridgeLog.Verbose("[EditorStateCache] Main thread resumed, clearing editor_blocked");
+            }
+
             // Skip evaluation when not connected — no one to send STATUS to
             var manager = BridgeManager.Instance;
             if (manager?.Client is not { IsConnected: true }) return;
@@ -110,7 +134,7 @@ namespace UnityBridge
 
         private static void EvaluatePhase()
         {
-            if (_domainReloadPending) return; // BridgeReloadHandler owns this state
+            if (Volatile.Read(ref _domainReloadPending)) return; // BridgeReloadHandler owns this state
 
             string phase;
             if (Tests.IsRunning)
@@ -152,5 +176,40 @@ namespace UnityBridge
         }
 
         public static string CurrentPhase => _currentPhase;
+
+        /// <summary>
+        /// Background thread callback: detects when EditorApplication.update has stopped firing
+        /// (e.g. modal dialog blocking main thread) and sends STATUS "busy" with "editor_blocked".
+        /// </summary>
+        private static async void OnWatchdogTick(object state)
+        {
+            if (Volatile.Read(ref _domainReloadPending)) return;
+
+            long elapsed = Stopwatch.GetTimestamp() - Volatile.Read(ref _lastUpdateTick);
+            if (elapsed < BlockedThresholdTicks) return;
+
+            // Atomically claim the right to send — prevents duplicate sends from overlapping timer ticks
+            if (Interlocked.CompareExchange(ref _blockedSent, 1, 0) != 0) return;
+
+            var manager = BridgeManager.Instance;
+            if (manager?.Client is not { IsConnected: true })
+            {
+                Volatile.Write(ref _blockedSent, 0);
+                return;
+            }
+
+            try
+            {
+                await manager.Client.SendStatusAsync(InstanceStatus.Busy, ActivityPhase.EditorBlocked);
+                _currentPhase = ActivityPhase.EditorBlocked;
+                _lastSentPhase = ActivityPhase.EditorBlocked;
+                BridgeLog.Verbose("[EditorStateCache] Main thread stall detected, sent editor_blocked");
+            }
+            catch (Exception ex)
+            {
+                Volatile.Write(ref _blockedSent, 0);
+                BridgeLog.Warn($"[EditorStateCache] Failed to send editor_blocked: {ex.Message}");
+            }
+        }
     }
 }
